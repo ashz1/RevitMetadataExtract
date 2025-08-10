@@ -4,7 +4,6 @@ import fs from 'fs-extra';
 import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import XLSX from 'xlsx';
 
 dotenv.config();
 
@@ -18,7 +17,6 @@ const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_BUCKET } = process.env;
 
 const RVT_FILE = path.join(__dirname, 'racbasicsampleproject.rvt');
 const OUTPUT_JSON = path.join(__dirname, 'metadata.json');
-const OUTPUT_XLSX = path.join(__dirname, 'metadata.xlsx');
 
 // OAuth2 token
 async function getAccessToken() {
@@ -115,35 +113,13 @@ async function waitForTranslation(token, urn, timeoutMs = 120000) {
   throw new Error('Translation timed out');
 }
 
-// Save metadata JSON to Excel with safe checks
-function saveMetadataToExcel(metadata, outputPath) {
-  if (!metadata?.data?.metadata?.length) {
-    throw new Error('No metadata objects found to save to Excel');
-  }
-
-  const firstMeta = metadata.data.metadata[0];
-
-  if (!firstMeta.properties || !Array.isArray(firstMeta.properties)) {
-    throw new Error('Metadata properties missing or invalid');
-  }
-
-  // Prepare rows from properties safely
-  const rows = firstMeta.properties.map(p => ({
-    Name: p.name || '',
-    Category: p.category || '',
-    Type: p.type || '',
-    Value: p.displayValue ?? p.value ?? ''
-  }));
-
-  if (rows.length === 0) {
-    throw new Error('No metadata properties found to save');
-  }
-
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Metadata');
-  XLSX.writeFile(wb, outputPath);
-  console.log(`Excel saved to ${outputPath}`);
+// Get metadata
+async function getMetadata(token, urn) {
+  const resp = await axios.get(
+    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return resp.data;
 }
 
 // Root page with extract button
@@ -153,7 +129,7 @@ app.get('/', (req, res) => {
     <form method="POST" action="/extract">
       <button type="submit">Extract Metadata</button>
     </form>
-    <p>After extraction, download <a href="/download/json">metadata JSON</a> or <a href="/download/excel">metadata Excel</a>.</p>
+    <p>After extraction, download <a href="/download/json">metadata JSON</a>.</p>
   `);
 });
 
@@ -174,21 +150,12 @@ app.post('/extract', async (req, res) => {
 
     const metadata = await getMetadata(token, urn);
 
-    // Debug logs to check metadata structure
-    console.log('Metadata keys:', Object.keys(metadata));
-    console.log('Metadata.data keys:', metadata.data ? Object.keys(metadata.data) : 'undefined');
-    console.log('First metadata object:', metadata.data?.metadata?.[0] || 'none');
-
-    // Save JSON
+    // Save JSON to disk
     await fs.writeJson(OUTPUT_JSON, metadata, { spaces: 2 });
-
-    // Save Excel
-    saveMetadataToExcel(metadata, OUTPUT_XLSX);
 
     res.send(`
       <h2>Metadata extraction completed!</h2>
-      <p><a href="/download/json">Download JSON</a></p>
-      <p><a href="/download/excel">Download Excel</a></p>
+      <p><a href="/download/json">Download metadata JSON</a></p>
       <p><a href="/">Back</a></p>
     `);
   } catch (err) {
@@ -203,22 +170,6 @@ app.get('/download/json', (req, res) => {
     if (err) res.status(404).send('JSON file not found');
   });
 });
-
-// Metadata Excel download route
-app.get('/download/excel', (req, res) => {
-  res.download(OUTPUT_XLSX, 'metadata.xlsx', err => {
-    if (err) res.status(404).send('Excel file not found');
-  });
-});
-
-// Helper: Get metadata function
-async function getMetadata(token, urn) {
-  const resp = await axios.get(
-    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  return resp.data;
-}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
