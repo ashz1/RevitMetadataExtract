@@ -15,17 +15,22 @@ const __dirname = path.dirname(__filename);
 
 const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_BUCKET } = process.env;
 
-// Get access token
+// Get access token (UPDATED for OAuth v2)
 async function getAccessToken() {
+  const basic = Buffer.from(`${APS_CLIENT_ID}:${APS_CLIENT_SECRET}`).toString('base64');
+  const params = new URLSearchParams();
+  params.append('grant_type', 'client_credentials');
+  params.append('scope', 'data:read data:write bucket:create bucket:read');
+
   const resp = await axios.post(
-    'https://developer.api.autodesk.com/authentication/v1/authenticate',
-    new URLSearchParams({
-      client_id: APS_CLIENT_ID,
-      client_secret: APS_CLIENT_SECRET,
-      grant_type: 'client_credentials',
-      scope: 'data:read data:write bucket:create bucket:read'
-    }),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    'https://developer.api.autodesk.com/authentication/v2/token',
+    params.toString(),
+    {
+      headers: {
+        Authorization: `Basic ${basic}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    }
   );
   return resp.data.access_token;
 }
