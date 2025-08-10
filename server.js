@@ -4,11 +4,12 @@ import fs from 'fs-extra';
 import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { marked } from 'marked';
 
 dotenv.config();
 
 const app = express();
-app.use(express.urlencoded({ extended: true })); // to parse form data
+app.use(express.urlencoded({ extended: true }));
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,7 +26,17 @@ const RVT_FILES = [
 const OUTPUT_JSON_DIR = path.join(__dirname, 'metadata_outputs');
 await fs.ensureDir(OUTPUT_JSON_DIR);
 
-// OAuth2 token function
+// Read README.md and convert to HTML
+async function getReadmeHTML() {
+  try {
+    const md = await fs.readFile(path.join(__dirname, 'README.md'), 'utf-8');
+    return marked(md);
+  } catch {
+    return '<p><em>README.md file not found</em></p>';
+  }
+}
+
+// Autodesk Forge OAuth2 token
 async function getAccessToken() {
   const tokenUrl = 'https://developer.api.autodesk.com/authentication/v2/token';
   const params = new URLSearchParams({
@@ -58,7 +69,7 @@ async function createBucket(token) {
   }
 }
 
-// Get signed upload URLs
+// Get signed upload URLs for S3 upload
 async function getSignedUploadUrls(token, fileName) {
   const url = `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload?minutesExpiration=60`;
   const resp = await axios.get(url, {
@@ -67,7 +78,7 @@ async function getSignedUploadUrls(token, fileName) {
   return resp.data;
 }
 
-// Upload file to S3
+// Upload file to S3 using signed URL
 async function uploadToS3(signedUrls, filePath) {
   const fileData = await fs.readFile(filePath);
   await axios.put(signedUrls[0], fileData, {
@@ -75,7 +86,7 @@ async function uploadToS3(signedUrls, filePath) {
   });
 }
 
-// Finalize upload
+// Finalize upload and get objectId
 async function finalizeUpload(token, fileName, uploadKey) {
   const url = `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload`;
   const resp = await axios.post(url, { uploadKey }, {
@@ -87,7 +98,7 @@ async function finalizeUpload(token, fileName, uploadKey) {
   return resp.data.objectId;
 }
 
-// Request translation
+// Request translation to SVF format
 async function translateFile(token, objectId) {
   const base64Urn = Buffer.from(objectId).toString('base64').replace(/=/g, '');
   await axios.post(
@@ -101,7 +112,7 @@ async function translateFile(token, objectId) {
   return base64Urn;
 }
 
-// Poll translation manifest until success or timeout
+// Poll translation manifest until complete or timeout
 async function waitForTranslation(token, urn, timeoutMs = 120000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -120,7 +131,7 @@ async function waitForTranslation(token, urn, timeoutMs = 120000) {
   throw new Error('Translation timed out');
 }
 
-// Get metadata
+// Get metadata JSON from Model Derivative API
 async function getMetadata(token, urn) {
   const resp = await axios.get(
     `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
@@ -129,33 +140,80 @@ async function getMetadata(token, urn) {
   return resp.data;
 }
 
-// Root route - show dropdown form
-app.get('/', (req, res) => {
+// Root route: render UI with README + file selector
+app.get('/', async (req, res) => {
+  const readmeHTML = await getReadmeHTML();
+
   const optionsHtml = RVT_FILES.map(
     file => `<option value="${file}">${file}</option>`
   ).join('\n');
 
   res.send(`
-    <h1>Select RVT File to Extract Metadata</h1>
-    <form method="POST" action="/extract">
-      <label for="rvtfile">Choose file:</label>
-      <select id="rvtfile" name="rvtfile" required>
-        ${optionsHtml}
-      </select>
-      <button type="submit">Extract Metadata</button>
-    </form>
-    <p>After extraction, download <a href="/downloads">all metadata JSON files</a>.</p>
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>RVT Metadata Extractor</title>
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+      <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .container { max-width: 900px; }
+        footer { margin-top: 40px; text-align: center; color: #6c757d; }
+        pre { white-space: pre-wrap; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1 class="mb-4">Revit RVT Metadata Extractor</h1>
+
+        <section id="project-info" class="mb-5">
+          <h2>About this project</h2>
+          <div class="border rounded p-3 bg-white" style="max-height: 400px; overflow-y: auto;">
+            ${readmeHTML}
+          </div>
+        </section>
+
+        <section id="extract-form" class="mb-5">
+          <h2>Select a RVT file</h2>
+          <form method="POST" action="/extract" class="mb-3">
+            <div class="mb-3">
+              <label for="rvtfile" class="form-label">Choose RVT file:</label>
+              <select id="rvtfile" name="rvtfile" class="form-select" required>
+                <option value="" disabled selected>Select a file...</option>
+                ${optionsHtml}
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Extract Metadata</button>
+          </form>
+        </section>
+
+        <section id="downloads">
+          <h2>Download Metadata Files</h2>
+          <p><a href="/downloads" class="btn btn-outline-secondary">View All Metadata JSON Files</a></p>
+        </section>
+
+        <footer>
+          &copy; 2025 Your Name | Powered by Autodesk Forge Platform Services
+        </footer>
+      </div>
+    </body>
+    </html>
   `);
 });
 
 // List all JSON metadata files for download
 app.get('/downloads', async (req, res) => {
   const files = await fs.readdir(OUTPUT_JSON_DIR);
-  const links = files.map(f => `<li><a href="/download/${encodeURIComponent(f)}">${f}</a></li>`).join('\n');
+  const links = files
+    .map(f => `<li><a href="/download/${encodeURIComponent(f)}">${f}</a></li>`)
+    .join('\n');
   res.send(`
-    <h1>Metadata JSON files</h1>
-    <ul>${links}</ul>
-    <p><a href="/">Back</a></p>
+    <div style="max-width:600px; margin:auto; padding:20px;">
+      <h1>Metadata JSON files</h1>
+      <ul>${links}</ul>
+      <p><a href="/">Back to Home</a></p>
+    </div>
   `);
 });
 
@@ -201,15 +259,23 @@ app.post('/extract', async (req, res) => {
     await fs.writeJson(outputFilePath, metadata, { spaces: 2 });
 
     res.send(`
-      <h2>Metadata extraction completed for <strong>${selectedFile}</strong>!</h2>
-      <p><a href="/download/${encodeURIComponent(safeFileName)}">Download metadata JSON</a></p>
-      <p><a href="/">Back</a></p>
-      <p><a href="/downloads">View all metadata files</a></p>
+      <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
+        <h2>Metadata extraction completed for <strong>${selectedFile}</strong>!</h2>
+        <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download metadata JSON</a></p>
+        <p><a href="/">Back to Home</a></p>
+        <p><a href="/downloads">View all metadata files</a></p>
+      </div>
     `);
 
   } catch (err) {
     console.error(err);
-    res.status(500).send(`<h3>Error:</h3><pre>${err.message}</pre><p><a href="/">Back</a></p>`);
+    res.status(500).send(`
+      <div style="max-width:600px; margin:auto; padding:20px; color:red;">
+        <h3>Error:</h3>
+        <pre>${err.message}</pre>
+        <p><a href="/">Back to Home</a></p>
+      </div>
+    `);
   }
 });
 
