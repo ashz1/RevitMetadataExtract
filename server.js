@@ -137,6 +137,14 @@ app.post('/extract', async (req, res) => {
     res.status(500).send(err.response?.data || err.message);
   }
 });
+app.get('/', (req, res) => {
+  res.send(`
+    <h1>APS RVT Metadata Extractor</h1>
+    <form method="POST" action="/extract">
+      <button type="submit">Extract Metadata</button>
+    </form>
+  `);
+});
 
 app.listen(process.env.PORT || 3000, () => {
   console.log(`Server running on http://localhost:${process.env.PORT || 3000}`);
