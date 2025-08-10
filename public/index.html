@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Upload RVT and extract metadata</title>
+</head>
+<body>
+  <h2>Upload a Revit (.rvt) file</h2>
+  <form id="uform" enctype="multipart/form-data" method="post" action="/upload-and-extract">
+    <input type="file" name="rvtfile" accept=".rvt" required />
+    <button type="submit">Upload & Extract</button>
+  </form>
+  <p>Result: browser will download an Excel file when ready.</p>
+</body>
+</html>
