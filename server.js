@@ -2,7 +2,6 @@ import express from 'express';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import axios from 'axios';
-import FormData from 'form-data';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -15,27 +14,26 @@ const __dirname = path.dirname(__filename);
 
 const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_BUCKET } = process.env;
 
-// Get access token (UPDATED for OAuth v2)
+// Get access token (OAuth v2, client_id/client_secret in body)
 async function getAccessToken() {
-  const basic = Buffer.from(`${APS_CLIENT_ID}:${APS_CLIENT_SECRET}`).toString('base64');
+  const tokenUrl = 'https://developer.api.autodesk.com/authentication/v2/token';
+
   const params = new URLSearchParams();
+  params.append('client_id', APS_CLIENT_ID);
+  params.append('client_secret', APS_CLIENT_SECRET);
   params.append('grant_type', 'client_credentials');
   params.append('scope', 'data:read data:write bucket:create bucket:read');
 
-  const resp = await axios.post(
-    'https://developer.api.autodesk.com/authentication/v2/token',
-    params.toString(),
-    {
-      headers: {
-        Authorization: `Basic ${basic}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
+  const resp = await axios.post(tokenUrl, params.toString(), {
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
     }
-  );
+  });
+
   return resp.data.access_token;
 }
 
-// Create bucket (if not exists)
+// Create bucket if not exists
 async function createBucket(token) {
   try {
     await axios.post(
@@ -44,7 +42,7 @@ async function createBucket(token) {
       { headers: { Authorization: `Bearer ${token}` } }
     );
   } catch (err) {
-    if (err.response?.status !== 409) {
+    if (err.response?.status !== 409) { // 409 = bucket exists
       throw err;
     }
   }
@@ -70,7 +68,7 @@ async function uploadFile(token, filePath) {
   return resp.data.objectId;
 }
 
-// Translate to SVF to get metadata
+// Request translation to SVF (for metadata extraction)
 async function translateFile(token, objectId) {
   const base64Urn = Buffer.from(objectId).toString('base64').replace(/=/g, '');
   await axios.post(
@@ -84,7 +82,7 @@ async function translateFile(token, objectId) {
   return base64Urn;
 }
 
-// Extract metadata
+// Get metadata JSON
 async function getMetadata(token, urn) {
   const resp = await axios.get(
     `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
@@ -93,7 +91,7 @@ async function getMetadata(token, urn) {
   return resp.data;
 }
 
-// Route: Extract metadata
+// POST /extract route
 app.post('/extract', async (req, res) => {
   try {
     const token = await getAccessToken();
@@ -101,7 +99,7 @@ app.post('/extract', async (req, res) => {
     const objectId = await uploadFile(token, path.join(__dirname, 'racbasicsampleproject.rvt'));
     const urn = await translateFile(token, objectId);
 
-    // Wait a few seconds before fetching metadata (simplest way)
+    // Wait 10 seconds for translation to complete (simplified)
     setTimeout(async () => {
       const metadata = await getMetadata(token, urn);
       res.json(metadata);
@@ -112,7 +110,10 @@ app.post('/extract', async (req, res) => {
   }
 });
 
+// Serve frontend from /public folder
 app.use(express.static(path.join(__dirname, 'public')));
-app.listen(process.env.PORT || 3000, () =>
-  console.log(`Server running on http://localhost:${process.env.PORT || 3000}`)
-);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server listening at http://localhost:${PORT}`);
+});
