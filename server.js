@@ -115,36 +115,38 @@ async function waitForTranslation(token, urn, timeoutMs = 120000) {
   throw new Error('Translation timed out');
 }
 
-// Get metadata
-async function getMetadata(token, urn) {
-  const resp = await axios.get(
-    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  return resp.data;
-}
-
-// Convert metadata JSON to simple Excel sheet
+// Save metadata JSON to Excel with safe checks
 function saveMetadataToExcel(metadata, outputPath) {
-  // Flatten metadata for demo - extracts properties of first metadata object
-  if (!metadata.data || !metadata.data.metadata || !metadata.data.metadata.length) {
-    throw new Error('No metadata found to save to Excel');
+  if (!metadata?.data?.metadata?.length) {
+    throw new Error('No metadata objects found to save to Excel');
   }
+
   const firstMeta = metadata.data.metadata[0];
+
+  if (!firstMeta.properties || !Array.isArray(firstMeta.properties)) {
+    throw new Error('Metadata properties missing or invalid');
+  }
+
+  // Prepare rows from properties safely
   const rows = firstMeta.properties.map(p => ({
-    Name: p.name,
-    Category: p.category,
-    Type: p.type,
-    Value: p.displayValue || p.value || ''
+    Name: p.name || '',
+    Category: p.category || '',
+    Type: p.type || '',
+    Value: p.displayValue ?? p.value ?? ''
   }));
+
+  if (rows.length === 0) {
+    throw new Error('No metadata properties found to save');
+  }
 
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Metadata');
   XLSX.writeFile(wb, outputPath);
+  console.log(`Excel saved to ${outputPath}`);
 }
 
-// Root page with button
+// Root page with extract button
 app.get('/', (req, res) => {
   res.send(`
     <h1>Extract Metadata from RVT</h1>
@@ -155,24 +157,32 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Extract metadata route
+// Extract route
 app.post('/extract', async (req, res) => {
   try {
     const fileName = path.basename(RVT_FILE);
     const token = await getAccessToken();
     await createBucket(token);
+
     const signedUpload = await getSignedUploadUrls(token, fileName);
     await uploadToS3(signedUpload.urls, RVT_FILE);
+
     const objectId = await finalizeUpload(token, fileName, signedUpload.uploadKey);
     const urn = await translateFile(token, objectId);
+
     await waitForTranslation(token, urn);
 
     const metadata = await getMetadata(token, urn);
 
-    // Save JSON metadata to disk
+    // Debug logs to check metadata structure
+    console.log('Metadata keys:', Object.keys(metadata));
+    console.log('Metadata.data keys:', metadata.data ? Object.keys(metadata.data) : 'undefined');
+    console.log('First metadata object:', metadata.data?.metadata?.[0] || 'none');
+
+    // Save JSON
     await fs.writeJson(OUTPUT_JSON, metadata, { spaces: 2 });
 
-    // Save Excel metadata
+    // Save Excel
     saveMetadataToExcel(metadata, OUTPUT_XLSX);
 
     res.send(`
@@ -187,19 +197,28 @@ app.post('/extract', async (req, res) => {
   }
 });
 
-// Download JSON file
+// Metadata JSON download route
 app.get('/download/json', (req, res) => {
   res.download(OUTPUT_JSON, 'metadata.json', err => {
     if (err) res.status(404).send('JSON file not found');
   });
 });
 
-// Download Excel file
+// Metadata Excel download route
 app.get('/download/excel', (req, res) => {
   res.download(OUTPUT_XLSX, 'metadata.xlsx', err => {
     if (err) res.status(404).send('Excel file not found');
   });
 });
+
+// Helper: Get metadata function
+async function getMetadata(token, urn) {
+  const resp = await axios.get(
+    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return resp.data;
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
