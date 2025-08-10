@@ -1,9 +1,10 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import fs from 'fs';
+import fs from 'fs-extra';
 import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import XLSX from 'xlsx';
 
 dotenv.config();
 
@@ -15,24 +16,26 @@ const __dirname = path.dirname(__filename);
 
 const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_BUCKET } = process.env;
 
-// Step 1: Get OAuth v2 Access Token
+const RVT_FILE = path.join(__dirname, 'racbasicsampleproject.rvt');
+const OUTPUT_JSON = path.join(__dirname, 'metadata.json');
+const OUTPUT_XLSX = path.join(__dirname, 'metadata.xlsx');
+
+// OAuth2 token
 async function getAccessToken() {
   const tokenUrl = 'https://developer.api.autodesk.com/authentication/v2/token';
-
-  const params = new URLSearchParams();
-  params.append('client_id', APS_CLIENT_ID);
-  params.append('client_secret', APS_CLIENT_SECRET);
-  params.append('grant_type', 'client_credentials');
-  params.append('scope', 'data:read data:write bucket:create bucket:read');
-
+  const params = new URLSearchParams({
+    client_id: APS_CLIENT_ID,
+    client_secret: APS_CLIENT_SECRET,
+    grant_type: 'client_credentials',
+    scope: 'data:read data:write bucket:create bucket:read'
+  });
   const resp = await axios.post(tokenUrl, params.toString(), {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
   });
-
   return resp.data.access_token;
 }
 
-// Step 2: Create bucket if it does not exist
+// Create bucket
 async function createBucket(token) {
   try {
     await axios.post(
@@ -40,37 +43,34 @@ async function createBucket(token) {
       { bucketKey: APS_BUCKET, policyKey: 'transient' },
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    console.log(`Bucket ${APS_BUCKET} created`);
-  } catch (err) {
-    if (err.response?.status === 409) {
-      // Bucket already exists, ignore
-      console.log(`Bucket ${APS_BUCKET} already exists`);
+    console.log(`Bucket created: ${APS_BUCKET}`);
+  } catch (e) {
+    if (e.response?.status === 409) {
+      console.log(`Bucket exists: ${APS_BUCKET}`);
     } else {
-      throw err;
+      throw e;
     }
   }
 }
 
-// Step 3a: Get signed S3 upload URL(s)
+// Get signed upload URLs
 async function getSignedUploadUrls(token, fileName) {
   const url = `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload?minutesExpiration=60`;
   const resp = await axios.get(url, {
     headers: { Authorization: `Bearer ${token}` }
   });
-  return resp.data; // { uploadKey, urls: [<signed S3 URLs>] }
+  return resp.data;
 }
 
-// Step 3b: Upload file to S3 signed URL(s)
+// Upload to S3
 async function uploadToS3(signedUrls, filePath) {
-  const fileData = fs.readFileSync(filePath);
-  // For simplicity, assume single URL (no multipart)
-  const url = signedUrls[0];
-  await axios.put(url, fileData, {
+  const fileData = await fs.readFile(filePath);
+  await axios.put(signedUrls[0], fileData, {
     headers: { 'Content-Type': 'application/octet-stream' }
   });
 }
 
-// Step 3c: Finalize upload
+// Finalize upload and get objectId
 async function finalizeUpload(token, fileName, uploadKey) {
   const url = `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload`;
   const resp = await axios.post(url, { uploadKey }, {
@@ -79,10 +79,10 @@ async function finalizeUpload(token, fileName, uploadKey) {
       'Content-Type': 'application/json'
     }
   });
-  return resp.data.objectId; // This is the "objectId" (URN) to use for translation
+  return resp.data.objectId;
 }
 
-// Step 4: Request translation to SVF (to extract metadata)
+// Request translation
 async function translateFile(token, objectId) {
   const base64Urn = Buffer.from(objectId).toString('base64').replace(/=/g, '');
   await axios.post(
@@ -96,7 +96,26 @@ async function translateFile(token, objectId) {
   return base64Urn;
 }
 
-// Step 5: Get metadata
+// Poll translation manifest until success or timeout
+async function waitForTranslation(token, urn, timeoutMs = 120000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const resp = await axios.get(
+      `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/manifest`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (resp.data.status === 'success') {
+      return;
+    }
+    if (resp.data.status === 'failed') {
+      throw new Error('Translation failed');
+    }
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  throw new Error('Translation timed out');
+}
+
+// Get metadata
 async function getMetadata(token, urn) {
   const resp = await axios.get(
     `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
@@ -105,47 +124,82 @@ async function getMetadata(token, urn) {
   return resp.data;
 }
 
-// Endpoint to trigger metadata extraction
-app.post('/extract', async (req, res) => {
-  try {
-    const filePath = path.join(__dirname, 'racbasicsampleproject.rvt');
-    const fileName = path.basename(filePath);
-
-    const token = await getAccessToken();
-    await createBucket(token);
-
-    // Get signed upload URLs
-    const signedUpload = await getSignedUploadUrls(token, fileName);
-
-    // Upload to S3
-    await uploadToS3(signedUpload.urls, filePath);
-
-    // Finalize upload & get objectId
-    const objectId = await finalizeUpload(token, fileName, signedUpload.uploadKey);
-
-    // Request translation
-    const urn = await translateFile(token, objectId);
-
-    // Wait for translation to complete - simple delay 10 sec (better to poll manifest in prod)
-    setTimeout(async () => {
-      const metadata = await getMetadata(token, urn);
-      res.json(metadata);
-    }, 10000);
-
-  } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).send(err.response?.data || err.message);
+// Convert metadata JSON to simple Excel sheet
+function saveMetadataToExcel(metadata, outputPath) {
+  // Flatten metadata for demo - extracts properties of first metadata object
+  if (!metadata.data || !metadata.data.metadata || !metadata.data.metadata.length) {
+    throw new Error('No metadata found to save to Excel');
   }
-});
+  const firstMeta = metadata.data.metadata[0];
+  const rows = firstMeta.properties.map(p => ({
+    Name: p.name,
+    Category: p.category,
+    Type: p.type,
+    Value: p.displayValue || p.value || ''
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Metadata');
+  XLSX.writeFile(wb, outputPath);
+}
+
+// Root page with button
 app.get('/', (req, res) => {
   res.send(`
-    <h1>APS RVT Metadata Extractor</h1>
+    <h1>Extract Metadata from RVT</h1>
     <form method="POST" action="/extract">
       <button type="submit">Extract Metadata</button>
     </form>
+    <p>After extraction, download <a href="/download/json">metadata JSON</a> or <a href="/download/excel">metadata Excel</a>.</p>
   `);
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log(`Server running on http://localhost:${process.env.PORT || 3000}`);
+// Extract metadata route
+app.post('/extract', async (req, res) => {
+  try {
+    const fileName = path.basename(RVT_FILE);
+    const token = await getAccessToken();
+    await createBucket(token);
+    const signedUpload = await getSignedUploadUrls(token, fileName);
+    await uploadToS3(signedUpload.urls, RVT_FILE);
+    const objectId = await finalizeUpload(token, fileName, signedUpload.uploadKey);
+    const urn = await translateFile(token, objectId);
+    await waitForTranslation(token, urn);
+
+    const metadata = await getMetadata(token, urn);
+
+    // Save JSON metadata to disk
+    await fs.writeJson(OUTPUT_JSON, metadata, { spaces: 2 });
+
+    // Save Excel metadata
+    saveMetadataToExcel(metadata, OUTPUT_XLSX);
+
+    res.send(`
+      <h2>Metadata extraction completed!</h2>
+      <p><a href="/download/json">Download JSON</a></p>
+      <p><a href="/download/excel">Download Excel</a></p>
+      <p><a href="/">Back</a></p>
+    `);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(`<h3>Error:</h3><pre>${err.message}</pre><p><a href="/">Back</a></p>`);
+  }
 });
+
+// Download JSON file
+app.get('/download/json', (req, res) => {
+  res.download(OUTPUT_JSON, 'metadata.json', err => {
+    if (err) res.status(404).send('JSON file not found');
+  });
+});
+
+// Download Excel file
+app.get('/download/excel', (req, res) => {
+  res.download(OUTPUT_XLSX, 'metadata.xlsx', err => {
+    if (err) res.status(404).send('Excel file not found');
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
