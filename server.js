@@ -13,6 +13,8 @@ const APS_HOST = process.env.APS_HOST || 'https://developer.api.autodesk.com';
 const CLIENT_ID = process.env.APS_CLIENT_ID;
 const CLIENT_SECRET = process.env.APS_CLIENT_SECRET;
 const BUCKET_KEY = process.env.APS_BUCKET || (`appbucket_${CLIENT_ID.replace(/[^a-z0-9]/gi,'').toLowerCase()}`);
+app.use(express.json({ limit: '500mb' }));
+app.use(express.urlencoded({ limit: '500mb', extended: true }));
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error('Set APS_CLIENT_ID and APS_CLIENT_SECRET in .env');
