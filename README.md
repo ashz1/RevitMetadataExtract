@@ -1,5 +1,7 @@
 # Revit RVT Metadata Extractor - by Aashay
 
+**GitHub repo:** [https://github.com/ashz1/RevitMetadataExtract](https://github.com/ashz1/RevitMetadataExtract)
+
 This project is a simple web app that extracts metadata from Autodesk Revit (.rvt) files using the Autodesk Forge Platform Services (APS) APIs after you select and extract any files.
 
 ## Features
@@ -20,6 +22,5 @@ This project is a simple web app that extracts metadata from Autodesk Revit (.rv
 
 ## Setup and Running
 
-1. Clone the repo and place your RVT files in the project root.
+1. Clone the repo, place your RVT files in the project root and change the names of the files in server.js.
 2. Create a `.env` file with your Autodesk Forge credentials and a unique bucket name:
-
