@@ -194,7 +194,7 @@ app.get('/', async (req, res) => {
         </section>
 
         <footer>
-          &copy; 2025 Your Name | Powered by Autodesk Forge Platform Services
+          &copy; 2025 Aashay Zende | aashayzende@gmail.com
         </footer>
       </div>
     </body>
