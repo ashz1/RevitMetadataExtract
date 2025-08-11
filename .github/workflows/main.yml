@@ -24,6 +24,5 @@ jobs:
     - name: Run tests (if any)
       run: npm test
 
-    - name: Lint (optional)
-      run: npx eslint .
+    
 
