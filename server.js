@@ -167,7 +167,7 @@ app.get('/', async (req, res) => {
       <div class="container">
         
 
-        <div class="border rounded p-3 bg-white" style="max-height: 400px; overflow-y: auto; width: 100vw; margin-left: calc(-50vw + 50%); padding-left: 1rem; padding-right: 1rem;">
+        <div class="border rounded p-3 bg-white" style="max-height: 400px; overflow-y: auto; width: 80vw; margin-left: calc(-50vw + 50%); padding-left: 1rem; padding-right: 1rem;">
         ${readmeHTML}
         </div>
 
