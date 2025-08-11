@@ -178,7 +178,7 @@ app.get('/', async (req, res) => {
           <h2>Select a RVT file</h2>
           <form method="POST" action="/extract" class="mb-3">
             <div class="mb-3">
-              <label for="rvtfile" class="form-label">Choose RVT file:</label>
+              
               <select id="rvtfile" name="rvtfile" class="form-select" required>
                 <option value="" disabled selected>Select a file...</option>
                 ${optionsHtml}
