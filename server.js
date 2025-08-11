@@ -165,7 +165,7 @@ app.get('/', async (req, res) => {
     </head>
     <body>
       <div class="container">
-        <h1 class="mb-4">Revit RVT Metadata Extractor</h1>
+        
 
         <section id="project-info" class="mb-5">
           <h2>About this project</h2>
