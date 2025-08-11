@@ -167,12 +167,9 @@ app.get('/', async (req, res) => {
       <div class="container">
         
 
-        <section id="project-info" class="mb-5">
-          
-          <div class="border rounded p-3 bg-white" style="max-height: 600px; overflow-y: auto;">
-            ${readmeHTML}
-          </div>
-        </section>
+        <div class="border rounded p-3 bg-white" style="max-height: 400px; overflow-y: auto; width: 100vw; margin-left: calc(-50vw + 50%); padding-left: 1rem; padding-right: 1rem;">
+        ${readmeHTML}
+        </div>
 
         <section id="extract-form" class="mb-5">
           <h2>Select a RVT file</h2>
