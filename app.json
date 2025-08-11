@@ -1,0 +1,15 @@
+{
+  "name": "Revit Metadata Extract",
+  "description": "A tool to extract metadata from Revit files.",
+  "repository": "https://github.com/ashz1/RevitMetadataExtract",
+  "keywords": ["heroku", "node", "revit", "metadata"],
+  "scripts": {
+    "test": "npm test"
+  },
+  "env": {
+    "NODE_ENV": {
+      "description": "Node environment",
+      "value": "test"
+    }
+  }
+}
