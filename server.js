@@ -1,45 +1,4 @@
-{
-  "data": {
-    "type": "metadata",
-    "metadata": [
-      {
-        "name": "{3D}",
-        "role": "3d",
-        "guid": "6bfb4886-f2ee-9ccb-8db0-c5c170220c40"
-      },
-      {
-        "name": "A102 - Plans",
-        "role": "2d",
-        "guid": "00fcf38d-e9ec-4092-bec8-cc4c05762b58"
-      },
-      {
-        "name": "A104 - Elev./Sec./Det.",
-        "role": "2d",
-        "guid": "3c2e6ddc-83c0-467d-8268-685f15571248"
-      },
-      {
-        "name": "A103 - Elevations/Sections",
-        "role": "2d",
-        "guid": "f7067b93-d967-4933-b1df-a61da3059b90"
-      },
-      {
-        "name": "A105 - Elev./ Stair Sections",
-        "role": "2d",
-        "guid": "51e1338c-71c9-4a5c-a752-ef4543f4a835"
-      },
-      {
-        "name": "A101 - Site Plan",
-        "role": "2d",
-        "guid": "b1bd813c-a46d-42b3-9243-5c2eb5370563"
-      },
-      {
-        "name": "A001 - Title Sheet",
-        "role": "2d",
-        "guid": "5ff6f044-2781-4f28-baa9-c2302092a716"
-      }
-    ]
-  }
-}' import express from 'express';
+import express from 'express';
 import dotenv from 'dotenv';
 import fs from 'fs-extra';
 import axios from 'axios';
@@ -322,8 +281,4 @@ app.post('/extract', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(Server running on port ${PORT}));'
-
-
-
-4/4
 
