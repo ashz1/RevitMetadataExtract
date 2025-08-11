@@ -51,7 +51,7 @@ async function getAccessToken() {
   return resp.data.access_token;
 }
 
-// Create bucket if not exists
+// This creates a bucket if it doesnt exist
 async function createBucket(token) {
   try {
     await axios.post(
