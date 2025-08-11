@@ -51,18 +51,18 @@ async function getAccessToken() {
   return resp.data.access_token;
 }
 
-// This creates a bucket if it doesnt exist
+// Create bucket if not exists
 async function createBucket(token) {
   try {
     await axios.post(
       'https://developer.api.autodesk.com/oss/v2/buckets',
       { bucketKey: APS_BUCKET, policyKey: 'transient' },
-      { headers: { Authorization: Bearer ${token} } }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
-    console.log(Bucket created: ${APS_BUCKET});
+    console.log(`Bucket created: ${APS_BUCKET}`);
   } catch (e) {
     if (e.response?.status === 409) {
-      console.log(Bucket exists: ${APS_BUCKET});
+      console.log(`Bucket exists: ${APS_BUCKET}`);
     } else {
       throw e;
     }
@@ -71,9 +71,9 @@ async function createBucket(token) {
 
 // Get signed upload URLs for S3 upload
 async function getSignedUploadUrls(token, fileName) {
-  const url = https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload?minutesExpiration=60;
+  const url = `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload?minutesExpiration=60`;
   const resp = await axios.get(url, {
-    headers: { Authorization: Bearer ${token} }
+    headers: { Authorization: `Bearer ${token}` }
   });
   return resp.data;
 }
@@ -88,10 +88,10 @@ async function uploadToS3(signedUrls, filePath) {
 
 // Finalize upload and get objectId
 async function finalizeUpload(token, fileName, uploadKey) {
-  const url = https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload;
+  const url = `https://developer.api.autodesk.com/oss/v2/buckets/${APS_BUCKET}/objects/${fileName}/signeds3upload`;
   const resp = await axios.post(url, { uploadKey }, {
     headers: {
-      Authorization: Bearer ${token},
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json'
     }
   });
@@ -107,7 +107,7 @@ async function translateFile(token, objectId) {
       input: { urn: base64Urn },
       output: { formats: [{ type: 'svf', views: ['3d', '2d'] }] }
     },
-    { headers: { Authorization: Bearer ${token}, 'Content-Type': 'application/json' } }
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
   );
   return base64Urn;
 }
@@ -117,8 +117,8 @@ async function waitForTranslation(token, urn, timeoutMs = 120000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const resp = await axios.get(
-      https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/manifest,
-      { headers: { Authorization: Bearer ${token} } }
+      `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/manifest`,
+      { headers: { Authorization: `Bearer ${token}` } }
     );
     if (resp.data.status === 'success') {
       return;
@@ -134,8 +134,8 @@ async function waitForTranslation(token, urn, timeoutMs = 120000) {
 // Get metadata JSON from Model Derivative API
 async function getMetadata(token, urn) {
   const resp = await axios.get(
-    https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata,
-    { headers: { Authorization: Bearer ${token} } }
+    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
+    { headers: { Authorization: `Bearer ${token}` } }
   );
   return resp.data;
 }
@@ -145,10 +145,10 @@ app.get('/', async (req, res) => {
   const readmeHTML = await getReadmeHTML();
 
   const optionsHtml = RVT_FILES.map(
-    file => <option value="${file}">${file}</option>
+    file => `<option value="${file}">${file}</option>`
   ).join('\n');
 
-  res.send(
+  res.send(`
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -199,22 +199,22 @@ app.get('/', async (req, res) => {
       </div>
     </body>
     </html>
-  );
+  `);
 });
 
 // List all JSON metadata files for download
 app.get('/downloads', async (req, res) => {
   const files = await fs.readdir(OUTPUT_JSON_DIR);
   const links = files
-    .map(f => <li><a href="/download/${encodeURIComponent(f)}">${f}</a></li>)
+    .map(f => `<li><a href="/download/${encodeURIComponent(f)}">${f}</a></li>`)
     .join('\n');
-  res.send(
+  res.send(`
     <div style="max-width:600px; margin:auto; padding:20px;">
       <h1>Metadata JSON files</h1>
       <ul>${links}</ul>
       <p><a href="/">Back to Home</a></p>
     </div>
-  );
+  `);
 });
 
 // Download route for individual metadata JSON files
@@ -258,26 +258,26 @@ app.post('/extract', async (req, res) => {
 
     await fs.writeJson(outputFilePath, metadata, { spaces: 2 });
 
-    res.send(
+    res.send(`
       <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
         <h2>Metadata extraction completed for <strong>${selectedFile}</strong>!</h2>
         <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download metadata JSON</a></p>
         <p><a href="/">Back to Home</a></p>
         <p><a href="/downloads">View all metadata files</a></p>
       </div>
-    );
+    `);
 
   } catch (err) {
     console.error(err);
-    res.status(500).send(
+    res.status(500).send(`
       <div style="max-width:600px; margin:auto; padding:20px; color:red;">
         <h3>Error:</h3>
         <pre>${err.message}</pre>
         <p><a href="/">Back to Home</a></p>
       </div>
-    );
+    `);
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(Server running on port ${PORT}));'
+app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
