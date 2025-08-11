@@ -154,7 +154,7 @@ app.get('/', async (req, res) => {
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>RVT Metadata Extractor</title>
+      
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
       <style>
         body { padding: 20px; background-color: #f8f9fa; }
