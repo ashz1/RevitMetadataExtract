@@ -141,13 +141,29 @@ async function getMetadata(token, urn) {
   return resp.data;
 }
 
-// Get properties using updated endpoint
+// Get properties for a metadata guid (or all)
 async function getProperties(token, urn, guid) {
-  const resp = await axios.get(
-    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata/${guid}/properties`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-  return resp.data;
+  if (guid === 'all') {
+    // If 'all' selected, fetch properties for all metadata GUIDs and merge
+    const metadata = await getMetadata(token, urn);
+    const allProps = [];
+
+    for (const md of metadata.data.metadata) {
+      const resp = await axios.get(
+        `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata/${md.guid}/properties`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      allProps.push(...resp.data.data.collection);
+    }
+
+    return { data: { collection: allProps } };
+  } else {
+    const resp = await axios.get(
+      `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata/${guid}/properties`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return resp.data;
+  }
 }
 
 // Root route: render UI with README + file selector
@@ -242,35 +258,75 @@ app.post('/extract', async (req, res) => {
       return res.status(400).send('Invalid file selected');
     }
 
-    // If 'all' is selected, handle accordingly or just reject as files need to be uploaded individually
-    if(selectedFile === 'all'){
-      return res.status(400).send('Extraction for "all" option is not supported in this version.');
-    }
+    if (selectedFile === 'all') {
+      // If 'all' selected, upload and process each file and merge results
+      const token = await getAccessToken();
+      await createBucket(token);
 
-    const filePath = path.join(__dirname, selectedFile);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).send('Selected RVT file not found on server');
-    }
+      let mergedMetadata = { data: { metadata: [], collection: [] } };
 
-    const token = await getAccessToken();
-    await createBucket(token);
+      for (const fileName of RVT_FILES.filter(f => f !== 'all')) {
+        const filePath = path.join(__dirname, fileName);
+        if (!fs.existsSync(filePath)) {
+          console.warn(`File not found: ${fileName}, skipping.`);
+          continue;
+        }
 
-    const signedUpload = await getSignedUploadUrls(token, selectedFile);
-    await uploadToS3(signedUpload.urls, filePath);
+        const signedUpload = await getSignedUploadUrls(token, fileName);
+        await uploadToS3(signedUpload.urls, filePath);
 
-    const objectId = await finalizeUpload(token, selectedFile, signedUpload.uploadKey);
-    const urn = await translateFile(token, objectId);
+        const objectId = await finalizeUpload(token, fileName, signedUpload.uploadKey);
+        const urn = await translateFile(token, objectId);
 
-    await waitForTranslation(token, urn);
+        await waitForTranslation(token, urn);
 
-    const metadata = await getMetadata(token, urn);
+        const metadata = await getMetadata(token, urn);
 
-    const safeFileName = selectedFile.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.json';
-    const outputFilePath = path.join(OUTPUT_JSON_DIR, safeFileName);
+        // Append metadata (metadata array) from each file to mergedMetadata
+        if (metadata.data?.metadata) {
+          mergedMetadata.data.metadata.push(...metadata.data.metadata);
+        }
+      }
 
-    await fs.writeJson(outputFilePath, metadata, { spaces: 2 });
+      // Save merged metadata json file
+      const safeFileName = 'all_rvts_metadata.json';
+      const outputFilePath = path.join(OUTPUT_JSON_DIR, safeFileName);
+      await fs.writeJson(outputFilePath, mergedMetadata, { spaces: 2 });
 
-    res.send(`
+      return res.send(`
+      <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
+        <h2>Metadata extraction completed for <strong>all files</strong>!</h2>
+        <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download merged metadata JSON</a></p>
+        <p><a href="/">Back to Home</a></p>
+        <p><a href="/downloads">View all metadata files</a></p>
+      </div>
+    `);
+    } else {
+      // Single file flow
+      const filePath = path.join(__dirname, selectedFile);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).send('Selected RVT file not found on server');
+      }
+
+      const token = await getAccessToken();
+      await createBucket(token);
+
+      const signedUpload = await getSignedUploadUrls(token, selectedFile);
+      await uploadToS3(signedUpload.urls, filePath);
+
+      const objectId = await finalizeUpload(token, selectedFile, signedUpload.uploadKey);
+      const urn = await translateFile(token, objectId);
+
+      await waitForTranslation(token, urn);
+
+      const metadata = await getMetadata(token, urn);
+
+      const safeFileName = selectedFile.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.json';
+      const outputFilePath = path.join(OUTPUT_JSON_DIR, safeFileName);
+
+      await fs.writeJson(outputFilePath, metadata, { spaces: 2 });
+
+      res.send(`
       <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
         <h2>Metadata extraction completed for <strong>${selectedFile}</strong>!</h2>
         <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download metadata JSON</a></p>
@@ -278,7 +334,7 @@ app.post('/extract', async (req, res) => {
         <p><a href="/downloads">View all metadata files</a></p>
       </div>
     `);
-
+    }
   } catch (err) {
     console.error(err);
     res.status(500).send(`
