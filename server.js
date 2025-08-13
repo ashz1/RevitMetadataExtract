@@ -21,8 +21,6 @@ const RVT_FILES = [
   'all',
   'Snowdon Towers Sample HVAC.rvt',
   'racadvancedsampleproject.rvt',
-  'racbasicsampleproject.rvt',
-  'rstadvancedsampleproject.rvt'
 ];
 
 const OUTPUT_JSON_DIR = path.join(__dirname, 'metadata_outputs');
