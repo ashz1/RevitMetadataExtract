@@ -1,62 +1,72 @@
 import express from 'express';
 import axios from 'axios';
-import path from 'path';
 import fs from 'fs-extra';
+import path from 'path';
 import 'dotenv/config';
+import fetch from 'node-fetch';
+import marked from 'marked';
 
-const app = express();
 const __dirname = path.resolve();
+const app = express();
+app.use(express.urlencoded({ extended: true }));
 
-// Config
-const OUTPUT_JSON_DIR = path.join(__dirname, 'output');
+// === CONFIG ===
+const OUTPUT_JSON_DIR = path.join(__dirname, 'output_json');
 await fs.ensureDir(OUTPUT_JSON_DIR);
 
 const RVT_FILES = [
-  'Snowdon Towers Sample HVAC.rvt',
-  'racadvancedsampleproject.rvt',
-  'racbasicsampleproject.rvt',
-  'rstadvancedsampleproject.rvt'
+  'sample1.rvt',
+  'sample2.rvt'
+  // Add more file names here
 ];
 
-// Middleware
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// === HELPER: Read README.md as HTML ===
+async function getReadmeHTML() {
+  const readmePath = path.join(__dirname, 'README.md');
+  if (!fs.existsSync(readmePath)) return '<p>No README found</p>';
+  const md = await fs.readFile(readmePath, 'utf-8');
+  return marked(md);
+}
 
-// APS Auth
+// === APS AUTH ===
 async function getAccessToken() {
-  const resp = await axios.post('https://developer.api.autodesk.com/authentication/v1/authenticate', new URLSearchParams({
-    client_id: process.env.APS_CLIENT_ID,
-    client_secret: process.env.APS_CLIENT_SECRET,
-    grant_type: 'client_credentials',
-    scope: 'data:read data:write data:create bucket:create bucket:read'
-  }));
+  const resp = await axios.post('https://developer.api.autodesk.com/authentication/v1/authenticate', null, {
+    params: {
+      client_id: process.env.APS_CLIENT_ID,
+      client_secret: process.env.APS_CLIENT_SECRET,
+      grant_type: 'client_credentials',
+      scope: 'data:read data:write bucket:create bucket:read'
+    }
+  });
   return resp.data.access_token;
 }
 
-// Create bucket
+// === Create bucket ===
 async function createBucket(token) {
+  const bucketKey = process.env.APS_BUCKET;
   try {
-    await axios.post('https://developer.api.autodesk.com/oss/v2/buckets', {
-      bucketKey: process.env.APS_BUCKET,
-      policyKey: 'transient'
-    }, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
+    await axios.post(
+      'https://developer.api.autodesk.com/oss/v2/buckets',
+      { bucketKey, policyKey: 'transient' },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
   } catch (err) {
     if (err.response && err.response.status !== 409) throw err;
   }
 }
 
-// Get signed upload URLs
+// === Get signed upload URLs ===
 async function getSignedUploadUrls(token, filename) {
-  const resp = await axios.post(`https://developer.api.autodesk.com/oss/v2/buckets/${process.env.APS_BUCKET}/objects/${encodeURIComponent(filename)}/signeds3upload`, {}, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const bucketKey = process.env.APS_BUCKET;
+  const resp = await axios.post(
+    `https://developer.api.autodesk.com/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(filename)}/signeds3upload`,
+    { minutesExpiration: 60 },
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
   return resp.data;
 }
 
-// Upload file to S3
+// === Upload to S3 signed URLs ===
 async function uploadToS3(urls, filePath) {
   const fileData = await fs.readFile(filePath);
   for (const url of urls) {
@@ -64,153 +74,128 @@ async function uploadToS3(urls, filePath) {
   }
 }
 
-// Finalize upload
+// === Finalize upload ===
 async function finalizeUpload(token, filename, uploadKey) {
-  const resp = await axios.post(`https://developer.api.autodesk.com/oss/v2/buckets/${process.env.APS_BUCKET}/objects/${encodeURIComponent(filename)}/signeds3upload`, {
-    uploadKey
-  }, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const bucketKey = process.env.APS_BUCKET;
+  const resp = await axios.post(
+    `https://developer.api.autodesk.com/oss/v2/buckets/${bucketKey}/objects/${encodeURIComponent(filename)}/signeds3upload`,
+    { uploadKey },
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
   return resp.data.objectId;
 }
 
-// Translate file to SVF2
+// === Translate file ===
 async function translateFile(token, objectId) {
   const urn = Buffer.from(objectId).toString('base64').replace(/=/g, '');
-  await axios.post('https://developer.api.autodesk.com/modelderivative/v2/designdata/job', {
-    input: { urn },
-    output: { formats: [{ type: 'svf2', views: ['2d', '3d'] }] }
-  }, {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  });
+  await axios.post(
+    'https://developer.api.autodesk.com/modelderivative/v2/designdata/job',
+    { input: { urn }, output: { formats: [{ type: 'svf', views: ['2d', '3d'] }] } },
+    { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+  );
   return urn;
 }
 
-// Wait for translation
+// === Wait for translation ===
 async function waitForTranslation(token, urn) {
-  let done = false;
-  while (!done) {
-    const resp = await axios.get(`https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/manifest`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (resp.data.status === 'success') {
-      done = true;
-    } else if (resp.data.status === 'failed') {
-      throw new Error('Translation failed');
-    } else {
-      await new Promise(r => setTimeout(r, 5000));
-    }
+  for (let i = 0; i < 20; i++) {
+    const resp = await axios.get(
+      `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/manifest`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (resp.data.status === 'success') return;
+    await new Promise(r => setTimeout(r, 10000));
   }
+  throw new Error('Translation timed out.');
 }
 
-// Get metadata tree
+// === Get full element properties ===
 async function getMetadata(token, urn) {
-  const resp = await axios.get(`https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  return resp.data;
+  const metaListResp = await axios.get(
+    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+
+  if (!metaListResp.data.data || !metaListResp.data.data.metadata || metaListResp.data.data.metadata.length === 0) {
+    throw new Error('No metadata found for this model.');
+  }
+
+  const modelGuid = metaListResp.data.data.metadata[0].guid;
+
+  const propsResp = await axios.get(
+    `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata/${modelGuid}/properties`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+
+  return propsResp.data;
 }
 
-// Get detailed properties for GUID
-async function getModelProperties(token, urn, guid) {
-  const url = `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata/${guid}/properties`;
-  const resp = await axios.get(url, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  return resp.data;
-}
+// === Routes ===
 
-// Routes
-app.get('/', (req, res) => {
-  const fileOptions = RVT_FILES.map(f => `<option value="${f}">${f}</option>`).join('');
+// UI page
+app.get('/', async (req, res) => {
+  const readmeHTML = await getReadmeHTML();
+  const optionsHtml = ['All', ...RVT_FILES].map(
+    file => `<option value="${file}">${file}</option>`
+  ).join('\n');
+
   res.send(`
-    <html>
+    <!DOCTYPE html>
+    <html lang="en">
     <head>
-      <title>RVT Metadata Extractor</title>
-      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
+      <style>
+        body { padding: 20px; background-color: #f8f9fa; }
+        .container { max-width: 900px; }
+        footer { margin-top: 40px; text-align: center; color: #6c757d; }
+        pre { white-space: pre-wrap; }
+      </style>
     </head>
-    <body class="bg-light">
-      <div class="container py-5">
-        <h1 class="mb-4">RVT Metadata Extractor</h1>
-        <form method="POST" action="/extract">
-          <div class="mb-3">
-            <label for="rvtfile" class="form-label">Select RVT File</label>
-            <select name="rvtfile" class="form-select">${fileOptions}</select>
-          </div>
-          <button class="btn btn-primary">Extract Metadata</button>
-        </form>
-        <hr>
-        <p><a href="/downloads">View all downloaded JSONs</a></p>
-        <p><a href="https://github.com/ashz1/RevitMetadataExtract" target="_blank">View GitHub Repo</a></p>
+    <body>
+      <div class="container">
+        <div class="border rounded p-3 bg-white" style="max-height: 400px; overflow-y: auto; width: 100%;">
+          ${readmeHTML}
+        </div>
+
+        <section id="extract-form" class="mb-5">
+          <h2>Select a RVT file</h2>
+          <form method="POST" action="/extract" class="mb-3">
+            <div class="mb-3">
+              <select id="rvtfile" name="rvtfile" class="form-select" required>
+                <option value="" disabled selected>Select a file...</option>
+                ${optionsHtml}
+              </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Extract Metadata</button>
+          </form>
+        </section>
+
+        <section id="downloads">
+          <h2>Download Metadata Files</h2>
+          <p><a href="/downloads" class="btn btn-outline-secondary">View All Metadata JSON Files</a></p>
+        </section>
+
+        <footer>
+          &copy; 2025 Aashay Zende | aashayzende@gmail.com
+        </footer>
       </div>
     </body>
     </html>
   `);
 });
 
+// Extraction route
 app.post('/extract', async (req, res) => {
   try {
     const selectedFile = req.body.rvtfile;
-
-    if (!RVT_FILES.includes(selectedFile)) {
-      return res.status(400).send('Invalid file selected');
-    }
-
-    const filePath = path.join(__dirname, selectedFile);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).send('Selected RVT file not found');
-    }
-
+    const filesToProcess = selectedFile === 'All' ? RVT_FILES : [selectedFile];
     const token = await getAccessToken();
     await createBucket(token);
 
-    const signedUpload = await getSignedUploadUrls(token, selectedFile);
-    await uploadToS3(signedUpload.urls, filePath);
+    const results = [];
 
-    const objectId = await finalizeUpload(token, selectedFile, signedUpload.uploadKey);
-    const urn = await translateFile(token, objectId);
-    await waitForTranslation(token, urn);
-
-    const metadataTree = await getMetadata(token, urn);
-    const firstGuid = metadataTree.data.metadata[0].guid;
-
-    const properties = await getModelProperties(token, urn, firstGuid);
-
-    const safeFileName = selectedFile.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_properties.json';
-    const outputFilePath = path.join(OUTPUT_JSON_DIR, safeFileName);
-    await fs.writeJson(outputFilePath, properties, { spaces: 2 });
-
-    res.send(`
-      <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
-        <h2>Property extraction completed for <strong>${selectedFile}</strong>!</h2>
-        <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download properties JSON</a></p>
-        <p><a href="/">Back to Home</a></p>
-        <p><a href="/downloads">View all metadata files</a></p>
-      </div>
-    `);
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).send(`
-      <div style="max-width:600px; margin:auto; padding:20px; color:red;">
-        <h3>Error:</h3>
-        <pre>${err.message}</pre>
-        <p><a href="/">Back to Home</a></p>
-      </div>
-    `);
-  }
-});
-
-app.get('/downloads', async (req, res) => {
-  const files = await fs.readdir(OUTPUT_JSON_DIR);
-  const links = files.map(f => `<li><a href="/download/${encodeURIComponent(f)}">${f}</a></li>`).join('');
-  res.send(`<h2>Downloaded JSON Files</h2><ul>${links}</ul><p><a href="/">Back</a></p>`);
-});
-
-app.get('/download/:filename', (req, res) => {
-  const filePath = path.join(OUTPUT_JSON_DIR, req.params.filename);
-  res.download(filePath);
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server listening at http://localhost:${PORT}`));
+    for (const file of filesToProcess) {
+      const filePath = path.join(__dirname, file);
+      if (!fs.existsSync(filePath)) {
