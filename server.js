@@ -16,6 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_BUCKET } = process.env;
 
+// Added 'all' option as first element
 const RVT_FILES = [
   'all',
   'Snowdon Towers Sample HVAC.rvt',
@@ -141,32 +142,28 @@ async function getMetadata(token, urn) {
   return resp.data;
 }
 
-// Get properties for a metadata guid (or all)
-async function getProperties(token, urn, guid) {
-  if (guid === 'all') {
-    // If 'all' selected, fetch properties for all metadata GUIDs and merge
-    const metadata = await getMetadata(token, urn);
-    const allProps = [];
-
-    for (const md of metadata.data.metadata) {
-      const resp = await axios.get(
-        `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata/${md.guid}/properties`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      allProps.push(...resp.data.data.collection);
-    }
-
-    return { data: { collection: allProps } };
-  } else {
+// Get all properties for a given urn by fetching each metadata guid's properties, merging all to get all possible info (dimensions, materials, etc)
+async function getAllProperties(token, urn) {
+  // Step 1: get metadata list to get all GUIDs
+  const metadata = await getMetadata(token, urn);
+  if (!metadata.data || !metadata.data.metadata) {
+    throw new Error('No metadata found');
+  }
+  let allProperties = [];
+  for (const meta of metadata.data.metadata) {
+    const guid = meta.guid;
     const resp = await axios.get(
       `https://developer.api.autodesk.com/modelderivative/v2/designdata/${urn}/metadata/${guid}/properties`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    return resp.data;
+    if (resp.data.data && resp.data.data.collection) {
+      allProperties = allProperties.concat(resp.data.data.collection);
+    }
   }
+  return allProperties;
 }
 
-// Root route: render UI with README + file selector
+// Root route: render UI with README + file selector (including 'all')
 app.get('/', async (req, res) => {
   const readmeHTML = await getReadmeHTML();
 
@@ -259,11 +256,11 @@ app.post('/extract', async (req, res) => {
     }
 
     if (selectedFile === 'all') {
-      // If 'all' selected, upload and process each file and merge results
+      // If 'all' selected, extract metadata for each file and merge all properties
       const token = await getAccessToken();
       await createBucket(token);
 
-      let mergedMetadata = { data: { metadata: [], collection: [] } };
+      let mergedMetadata = { data: { metadata: [], properties: [] } };
 
       for (const fileName of RVT_FILES.filter(f => f !== 'all')) {
         const filePath = path.join(__dirname, fileName);
@@ -282,14 +279,15 @@ app.post('/extract', async (req, res) => {
 
         const metadata = await getMetadata(token, urn);
 
-        // Append metadata (metadata array) from each file to mergedMetadata
-        if (metadata.data?.metadata) {
-          mergedMetadata.data.metadata.push(...metadata.data.metadata);
-        }
+        mergedMetadata.data.metadata.push(...(metadata.data.metadata || []));
+
+        // Get all properties for this urn and merge
+        const props = await getAllProperties(token, urn);
+        mergedMetadata.data.properties = mergedMetadata.data.properties.concat(props);
       }
 
       // Save merged metadata json file
-      const safeFileName = 'all_rvts_metadata.json';
+      const safeFileName = 'all_rvts_metadata_full.json';
       const outputFilePath = path.join(OUTPUT_JSON_DIR, safeFileName);
       await fs.writeJson(outputFilePath, mergedMetadata, { spaces: 2 });
 
@@ -321,15 +319,26 @@ app.post('/extract', async (req, res) => {
 
       const metadata = await getMetadata(token, urn);
 
-      const safeFileName = selectedFile.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.json';
+      // Get all properties (dimensions, materials, etc) by fetching all metadata guid properties and merging
+      const allProperties = await getAllProperties(token, urn);
+
+      // Combine metadata and allProperties into one object to save
+      const fullMetadata = {
+        data: {
+          metadata: metadata.data.metadata || [],
+          properties: allProperties
+        }
+      };
+
+      const safeFileName = selectedFile.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_full.json';
       const outputFilePath = path.join(OUTPUT_JSON_DIR, safeFileName);
 
-      await fs.writeJson(outputFilePath, metadata, { spaces: 2 });
+      await fs.writeJson(outputFilePath, fullMetadata, { spaces: 2 });
 
       res.send(`
       <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
         <h2>Metadata extraction completed for <strong>${selectedFile}</strong>!</h2>
-        <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download metadata JSON</a></p>
+        <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download full metadata JSON</a></p>
         <p><a href="/">Back to Home</a></p>
         <p><a href="/downloads">View all metadata files</a></p>
       </div>
