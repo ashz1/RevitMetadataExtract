@@ -10,13 +10,13 @@ dotenv.config();
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json()); // to parse JSON bodies
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const { APS_CLIENT_ID, APS_CLIENT_SECRET, APS_BUCKET } = process.env;
 
-// Added 'all' option as first element
 const RVT_FILES = [
   'all',
   'Snowdon Towers Sample HVAC.rvt',
@@ -142,7 +142,6 @@ async function getMetadata(token, urn) {
 
 // Get all properties for a given urn by fetching each metadata guid's properties, merging all to get all possible info (dimensions, materials, etc)
 async function getAllProperties(token, urn) {
-  // Step 1: get metadata list to get all GUIDs
   const metadata = await getMetadata(token, urn);
   if (!metadata.data || !metadata.data.metadata) {
     throw new Error('No metadata found');
@@ -161,7 +160,7 @@ async function getAllProperties(token, urn) {
   return allProperties;
 }
 
-// Root route: render UI with README + file selector (including 'all')
+// Serve homepage with embedded extraction result & JSON container
 app.get('/', async (req, res) => {
   const readmeHTML = await getReadmeHTML();
 
@@ -181,22 +180,21 @@ app.get('/', async (req, res) => {
         body { padding: 20px; background-color: #f8f9fa; }
         .container { max-width: 900px; }
         footer { margin-top: 40px; text-align: center; color: #6c757d; }
-        pre { white-space: pre-wrap; }
+        pre { white-space: pre-wrap; max-height: 400px; overflow-y: auto; background: #f1f1f1; padding: 10px; }
       </style>
+      <title>RVT Metadata Extractor</title>
     </head>
     <body>
       <div class="container">
-        
 
         <div class="border rounded p-3 bg-white" style="max-height: 400px; overflow-y: auto; width: 58vw;">
-        ${readmeHTML}
+          ${readmeHTML}
         </div>
 
         <section id="extract-form" class="mb-5">
           <h2>Select a RVT file</h2>
-          <form method="POST" action="/extract" class="mb-3">
+          <form id="extractForm" class="mb-3">
             <div class="mb-3">
-              
               <select id="rvtfile" name="rvtfile" class="form-select" required>
                 <option value="" disabled selected>Select a file...</option>
                 ${optionsHtml}
@@ -204,17 +202,58 @@ app.get('/', async (req, res) => {
             </div>
             <button type="submit" class="btn btn-primary">Extract Metadata</button>
           </form>
+          <div id="statusMessage" class="mb-3"></div>
         </section>
 
-        <section id="downloads">
+        <section id="downloads" class="mb-5">
           <h2>Download Metadata Files</h2>
           <p><a href="/downloads" class="btn btn-outline-secondary">View All Metadata JSON Files</a></p>
+        </section>
+
+        <section id="jsonOutput" style="white-space: pre-wrap; background:#eee; padding:15px; border-radius:5px; max-height: 500px; overflow-y: auto;">
+          <!-- JSON metadata will be displayed here -->
         </section>
 
         <footer>
           &copy; 2025 Aashay Zende | aashayzende@gmail.com
         </footer>
       </div>
+
+      <script>
+        const form = document.getElementById('extractForm');
+        const statusDiv = document.getElementById('statusMessage');
+        const jsonOutput = document.getElementById('jsonOutput');
+
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          statusDiv.textContent = 'Extracting metadata... please wait.';
+          jsonOutput.textContent = '';
+
+          const formData = new FormData(form);
+          const rvtfile = formData.get('rvtfile');
+
+          try {
+            const resp = await fetch('/extract', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ rvtfile })
+            });
+            if (!resp.ok) {
+              const errorText = await resp.text();
+              statusDiv.textContent = 'Error during extraction: ' + errorText;
+              return;
+            }
+            const data = await resp.json();
+            statusDiv.innerHTML = \`Metadata extraction completed for <strong>\${rvtfile}</strong>! Download: <a href="\${data.downloadLink}" target="_blank">JSON file</a>\`;
+            // Pretty print JSON output below
+            jsonOutput.textContent = JSON.stringify(data.metadata, null, 2);
+          } catch (err) {
+            statusDiv.textContent = 'Error: ' + err.message;
+          }
+        });
+      </script>
     </body>
     </html>
   `);
@@ -250,14 +289,13 @@ app.post('/extract', async (req, res) => {
     const selectedFile = req.body.rvtfile;
 
     if (!RVT_FILES.includes(selectedFile)) {
-      return res.status(400).send('Invalid file selected');
+      return res.status(400).json({ error: 'Invalid file selected' });
     }
 
-    if (selectedFile === 'all') {
-      // If 'all' selected, extract metadata for each file and merge all properties
-      const token = await getAccessToken();
-      await createBucket(token);
+    const token = await getAccessToken();
+    await createBucket(token);
 
+    if (selectedFile === 'all') {
       let mergedMetadata = { data: { metadata: [], properties: [] } };
 
       for (const fileName of RVT_FILES.filter(f => f !== 'all')) {
@@ -279,33 +317,25 @@ app.post('/extract', async (req, res) => {
 
         mergedMetadata.data.metadata.push(...(metadata.data.metadata || []));
 
-        // Get all properties for this urn and merge
         const props = await getAllProperties(token, urn);
         mergedMetadata.data.properties = mergedMetadata.data.properties.concat(props);
       }
 
-      // Save merged metadata json file
       const safeFileName = 'all_rvts_metadata_full.json';
       const outputFilePath = path.join(OUTPUT_JSON_DIR, safeFileName);
       await fs.writeJson(outputFilePath, mergedMetadata, { spaces: 2 });
 
-      return res.send(`
-      <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
-        <h2>Metadata extraction completed for <strong>all files</strong>!</h2>
-        <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download merged metadata JSON</a></p>
-        <p><a href="/">Back to Home</a></p>
-        <p><a href="/downloads">View all metadata files</a></p>
-      </div>
-    `);
+      // Respond with JSON (metadata + download link)
+      return res.json({
+        message: 'Extraction completed for all files',
+        metadata: mergedMetadata,
+        downloadLink: `/download/${encodeURIComponent(safeFileName)}`
+      });
     } else {
-      // Single file flow
       const filePath = path.join(__dirname, selectedFile);
       if (!fs.existsSync(filePath)) {
-        return res.status(404).send('Selected RVT file not found on server');
+        return res.status(404).json({ error: 'Selected RVT file not found on server' });
       }
-
-      const token = await getAccessToken();
-      await createBucket(token);
 
       const signedUpload = await getSignedUploadUrls(token, selectedFile);
       await uploadToS3(signedUpload.urls, filePath);
@@ -317,10 +347,8 @@ app.post('/extract', async (req, res) => {
 
       const metadata = await getMetadata(token, urn);
 
-      // Get all properties (dimensions, materials, etc) by fetching all metadata guid properties and merging
       const allProperties = await getAllProperties(token, urn);
 
-      // Combine metadata and allProperties into one object to save
       const fullMetadata = {
         data: {
           metadata: metadata.data.metadata || [],
@@ -333,24 +361,15 @@ app.post('/extract', async (req, res) => {
 
       await fs.writeJson(outputFilePath, fullMetadata, { spaces: 2 });
 
-      res.send(`
-      <div style="max-width:600px; margin:auto; padding:20px; text-align:center;">
-        <h2>Metadata extraction completed for <strong>${selectedFile}</strong>!</h2>
-        <p><a href="/download/${encodeURIComponent(safeFileName)}" class="btn btn-success">Download full metadata JSON</a></p>
-        <p><a href="/">Back to Home</a></p>
-        <p><a href="/downloads">View all metadata files</a></p>
-      </div>
-    `);
+      return res.json({
+        message: `Extraction completed for ${selectedFile}`,
+        metadata: fullMetadata,
+        downloadLink: `/download/${encodeURIComponent(safeFileName)}`
+      });
     }
   } catch (err) {
     console.error(err);
-    res.status(500).send(`
-      <div style="max-width:600px; margin:auto; padding:20px; color:red;">
-        <h3>Error:</h3>
-        <pre>${err.message}</pre>
-        <p><a href="/">Back to Home</a></p>
-      </div>
-    `);
+    return res.status(500).json({ error: err.message });
   }
 });
 
